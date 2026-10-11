@@ -1,123 +1,85 @@
-import requests
-import os
-from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup
-from telegram.ext import Application, CommandHandler, CallbackQueryHandler, ContextTypes
+import os, requests, time
+from threading import Thread
 from flask import Flask
-import threading
+import telegram
+from telegram.ext import Application, CommandHandler, CallbackQueryHandler, ContextTypes
+from telegram import InlineKeyboardButton, InlineKeyboardMarkup, Update
 
-BOT_TOKEN = "YOUR_BOT_TOKEN_HERE"
-API_SIM5 = "YOUR_SIM5_API_KEY"
-ADMIN_ID = 123456789
+TOKEN = os.environ.get("BOT_TOKEN")
+SIM5 = os.environ.get("SIM5_KEY")
+BASE = "https://5sim.net/v1"
+HEADERS = {"Authorization": f"Bearer {SIM5}"}
+API = f"https://api.telegram.org/bot{TOKEN}"
+EUROPE = ["portugal", "romania", "estonia", "poland", "bulgaria", "netherlands", "sweden"]
 
-EUROPE_COUNTRIES = ["portugal", "romania", "estonia", "poland", "bulgaria", "netherlands"]
-
-def get_balance_5sim():
-    r = requests.get("https://5sim.net/v1/user/profile", headers={"Authorization": f"Bearer {API_5SIM}"}).json()
-    return r.get("balance")
-
-def buy_number(country, operator="any", product="whatsapp"):
-    url = f"https://5sim.net/v1/user/buy/activation/{country}/{operator}/{product}"
-    r = requests.get(url, headers={"Authorization": f"Bearer {API_5SIM}"}).json()
-    return r
-
-def get_sms(order_id):
-    url = f"https://5sim.net/v1/user/check/{order_id}"
-    r = requests.get(url, headers={"Authorization": f"Bearer {API_5SIM}"}).json()
-    return r
-
-def cancel_order(order_id):
-    url = f"https://5sim.net/v1/user/cancel/{order_id}"
-    r = requests.get(url, headers={"Authorization": f"Bearer {API_5SIM}"}).json()
-    return r
-
-async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    keyboard = [
-        [InlineKeyboardButton("🇪🇺 Europe Numbers", callback_data="europe")],
-        [InlineKeyboardButton("💰 Check Balance", callback_data="balance")],
-        [InlineKeyboardButton("📞 My Numbers", callback_data="my_numbers")],
-        [InlineKeyboardButton("💬 Support", callback_data="support")]
-    ]
-    await update.message.reply_text(
-        "Welcome to PRO 5SIM Bot 🇪🇺\nNo sleep, Instant delivery, Auto-refund",
-        reply_markup=InlineKeyboardMarkup(keyboard)
-    )
-
-async def europe(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    query = update.callback_query
-    await query.answer()
-    keyboard = []
-    for country in EUROPE_COUNTRIES:
-        try:
-            url = f"https://5sim.net/v1/guest/prices?product=whatsapp&country={country}"
-            price_data = requests.get(url).json()
-            price = price_data[country]['whatsapp'][0]['cost']
-            keyboard.append([InlineKeyboardButton(f"{country.title()} - ${price}", callback_data=f"buy_{country}")])
-        except:
-            keyboard.append([InlineKeyboardButton(f"{country.title()}", callback_data=f"buy_{country}")])
-
-    await query.edit_message_text(
-        "🇪🇺 SELECT EUROPE COUNTRY:",
-        reply_markup=InlineKeyboardMarkup(keyboard)
-    )
-
-async def buy_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    query = update.callback_query
-    country = query.data.replace("buy_", "")
-    await query.answer()
-    await query.edit_message_text(f"Buying {country} number... ⏳")
-
-    order = buy_number(country)
-    if "id" in order:
-        order_id = order["id"]
-        phone = order["phone"]
-        context.user_data['last_order'] = order_id
-
-        keyboard = [
-            [InlineKeyboardButton("📩 Get Code (/code)", callback_data=f"code_{order_id}")],
-            [InlineKeyboardButton("❌ Cancel & Refund", callback_data=f"cancel_{order_id}")]
-        ]
-        await query.edit_message_text(
-            f"✅ Number Bought!\n\nCountry: {country.title()}\nNumber: +{phone}\nID: {order_id}\n\nGo to WhatsApp and enter number. Then click Get Code.",
-            reply_markup=InlineKeyboardMarkup(keyboard)
-        )
-    else:
-        await query.edit_message_text(f"❌ Error: {order}")
-
-async def code_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    query = update.callback_query
-    order_id = query.data.replace("code_", "")
-    await query.answer()
-
-    sms_data = get_sms(order_id)
-    if sms_data.get("sms"):
-        code = sms_data["sms"][0]["code"]
-        await query.edit_message_text(f"✅ YOUR CODE: {code}\n\nUse am now! Then click Finish.")
-    else:
-        await query.edit_message_text(f"⏳ Waiting for SMS... Status: {sms_data.get('status')}\nTry again in 10 sec.\n\nIf e show BANNED, click Cancel for auto-refund.")
-
-async def cancel_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    query = update.callback_query
-    order_id = query.data.replace("cancel_", "")
-    cancel_order(order_id)
-    await query.edit_message_text(f"✅ Order {order_id} cancelled. Money refunded automatically to your balance!")
+def send(cid, txt, markup=None):
+    try:
+        data = {"chat_id": cid, "text": txt, "parse_mode": "HTML"}
+        if markup:
+            import json
+            data["reply_markup"] = json.dumps(markup.to_dict() if hasattr(markup, 'to_dict') else markup)
+        requests.post(f"{API}/sendMessage", json=data, timeout=10)
+    except:
+        pass
 
 app = Flask(__name__)
 @app.route('/')
 def home():
-    return "Bot is ALIVE - No Sleep"
+    return "Bot is ALIVE"
 
-def run_flask():
-    app.run(host='0.0.0.0', port=8080)
+async def start_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    kb = [[InlineKeyboardButton("🇪🇺 Europe Numbers", callback_data="europe")],[InlineKeyboardButton("💰 Balance", callback_data="balance")]]
+    await update.message.reply_text("Welcome to PRO 5SIM Bot 🇪🇺", reply_markup=InlineKeyboardMarkup(kb))
+
+async def btn_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    q = update.callback_query
+    await q.answer()
+    data = q.data
+    if data == "europe":
+        kb = []
+        for c in EUROPE:
+            kb.append([InlineKeyboardButton(c.title(), callback_data=f"buy_{c}")])
+        await q.edit_message_text("🇪🇺 SELECT EUROPE:", reply_markup=InlineKeyboardMarkup(kb))
+    elif data.startswith("buy_"):
+        country = data.replace("buy_", "")
+        await q.edit_message_text(f"Buying {country}... ⏳")
+        try:
+            r = requests.get(f"{BASE}/user/buy/activation/{country}/any/whatsapp", headers=HEADERS, timeout=15).json()
+            if "id" in r:
+                kb = [[InlineKeyboardButton("📩 Get Code", callback_data=f"code_{r['id']}")],[InlineKeyboardButton("❌ Cancel", callback_data=f"cancel_{r['id']}")]]
+                await q.edit_message_text(f"✅ Number: +{r['phone']}\nID: {r['id']}\nGo WhatsApp now!", reply_markup=InlineKeyboardMarkup(kb))
+            else:
+                await q.edit_message_text(f"❌ Error: {r}")
+        except Exception as e:
+            await q.edit_message_text(f"❌ Error: {e}")
+    elif data.startswith("code_"):
+        oid = data.replace("code_", "")
+        try:
+            r = requests.get(f"{BASE}/user/check/{oid}", headers=HEADERS, timeout=10).json()
+            if r.get("sms"):
+                await q.edit_message_text(f"✅ CODE: {r['sms'][0]['code']}")
+            else:
+                await q.edit_message_text(f"⏳ Waiting... Status: {r.get('status')}")
+        except Exception as e:
+            await q.edit_message_text(f"Error {e}")
+    elif data.startswith("cancel_"):
+        oid = data.replace("cancel_", "")
+        requests.get(f"{BASE}/user/cancel/{oid}", headers=HEADERS)
+        await q.edit_message_text("✅ Cancelled & Refunded")
+    elif data == "balance":
+        try:
+            r = requests.get(f"{BASE}/user/profile", headers=HEADERS).json()
+            await q.edit_message_text(f"💰 Balance: {r.get('balance')} RUB")
+        except:
+            await q.edit_message_text("Error balance")
+
+def run_bot():
+    application = Application.builder().token(TOKEN).build()
+    application.add_handler(CommandHandler("start", start_cmd))
+    application.add_handler(CallbackQueryHandler(btn_handler))
+    application.run_polling()
 
 if __name__ == "__main__":
-    threading.Thread(target=run_flask).start()
-
-    application = Application.builder().token(BOT_TOKEN).build()
-    application.add_handler(CommandHandler("start", start))
-    application.add_handler(CallbackQueryHandler(europe, pattern="europe"))
-    application.add_handler(CallbackQueryHandler(buy_callback, pattern="buy_"))
-    application.add_handler(CallbackQueryHandler(code_callback, pattern="code_"))
-    application.add_handler(CallbackQueryHandler(cancel_callback, pattern="cancel_"))
-
-    print("PRO BOT STARTED - No sleep")
-    application.run_polling()
+    Thread(target=lambda: app.run(host='0.0.0.0', port=int(os.environ.get("PORT", 10000)))).start()
+    time.sleep(2)
+    run_bot()
