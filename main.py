@@ -1,85 +1,71 @@
-import os, requests, time
-from threading import Thread
+import os, requests, threading, time
 from flask import Flask
-import telegram
-from telegram.ext import Application, CommandHandler, CallbackQueryHandler, ContextTypes
-from telegram import InlineKeyboardButton, InlineKeyboardMarkup, Update
 
 TOKEN = os.environ.get("BOT_TOKEN")
 SIM5 = os.environ.get("SIM5_KEY")
 BASE = "https://5sim.net/v1"
-HEADERS = {"Authorization": f"Bearer {SIM5}"}
-API = f"https://api.telegram.org/bot{TOKEN}"
-EUROPE = ["portugal", "romania", "estonia", "poland", "bulgaria", "netherlands", "sweden"]
-
-def send(cid, txt, markup=None):
-    try:
-        data = {"chat_id": cid, "text": txt, "parse_mode": "HTML"}
-        if markup:
-            import json
-            data["reply_markup"] = json.dumps(markup.to_dict() if hasattr(markup, 'to_dict') else markup)
-        requests.post(f"{API}/sendMessage", json=data, timeout=10)
-    except:
-        pass
+H = {"Authorization": f"Bearer {SIM5}"}
+TG = f"https://api.telegram.org/bot{TOKEN}"
+EU = ["portugal","romania","estonia","poland","bulgaria","netherlands"]
 
 app = Flask(__name__)
 @app.route('/')
 def home():
-    return "Bot is ALIVE"
+    return "Bot ALIVE"
 
-async def start_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    kb = [[InlineKeyboardButton("🇪🇺 Europe Numbers", callback_data="europe")],[InlineKeyboardButton("💰 Balance", callback_data="balance")]]
-    await update.message.reply_text("Welcome to PRO 5SIM Bot 🇪🇺", reply_markup=InlineKeyboardMarkup(kb))
+def tg(method, data):
+    try:
+        requests.post(f"{TG}/{method}", json=data, timeout=10)
+    except:
+        pass
 
-async def btn_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    q = update.callback_query
-    await q.answer()
-    data = q.data
-    if data == "europe":
-        kb = []
-        for c in EUROPE:
-            kb.append([InlineKeyboardButton(c.title(), callback_data=f"buy_{c}")])
-        await q.edit_message_text("🇪🇺 SELECT EUROPE:", reply_markup=InlineKeyboardMarkup(kb))
-    elif data.startswith("buy_"):
-        country = data.replace("buy_", "")
-        await q.edit_message_text(f"Buying {country}... ⏳")
+def bot_loop():
+    offset = 0
+    while True:
         try:
-            r = requests.get(f"{BASE}/user/buy/activation/{country}/any/whatsapp", headers=HEADERS, timeout=15).json()
-            if "id" in r:
-                kb = [[InlineKeyboardButton("📩 Get Code", callback_data=f"code_{r['id']}")],[InlineKeyboardButton("❌ Cancel", callback_data=f"cancel_{r['id']}")]]
-                await q.edit_message_text(f"✅ Number: +{r['phone']}\nID: {r['id']}\nGo WhatsApp now!", reply_markup=InlineKeyboardMarkup(kb))
-            else:
-                await q.edit_message_text(f"❌ Error: {r}")
+            r = requests.get(f"{TG}/getUpdates", params={"offset": offset, "timeout": 25}, timeout=30).json()
+            for u in r.get("result", []):
+                offset = u["update_id"] + 1
+                if "message" in u and u["message"].get("text") == "/start":
+                    cid = u["message"]["chat"]["id"]
+                    kb = {"inline_keyboard": [[{"text":"🇪🇺 Europe Numbers","callback_data":"europe"}],[{"text":"💰 Balance","callback_data":"balance"}]]}
+                    tg("sendMessage", {"chat_id": cid, "text": "Welcome PRO 5SIM Bot 🇪🇺\nEurope only!", "reply_markup": kb})
+                if "callback_query" in u:
+                    cb = u["callback_query"]
+                    cid = cb["message"]["chat"]["id"]
+                    mid = cb["message"]["message_id"]
+                    data = cb["data"]
+                    requests.post(f"{TG}/answerCallbackQuery", json={"callback_query_id": cb["id"]})
+                    if data == "europe":
+                        kb = {"inline_keyboard": [[{"text": c.title(), "callback_data": f"buy_{c}"}] for c in EU]}
+                        tg("editMessageText", {"chat_id": cid, "message_id": mid, "text": "🇪🇺 SELECT EUROPE:", "reply_markup": kb})
+                    elif data.startswith("buy_"):
+                        c = data.replace("buy_", "")
+                        tg("editMessageText", {"chat_id": cid, "message_id": mid, "text": f"Buying {c}... ⏳"})
+                        order = requests.get(f"{BASE}/user/buy/activation/{c}/any/whatsapp", headers=H, timeout=15).json()
+                        if "id" in order:
+                            kb = {"inline_keyboard": [[{"text":"📩 Get Code","callback_data": f"code_{order['id']}"}],[{"text":"❌ Cancel","callback_data": f"cancel_{order['id']}"}]]}
+                            tg("editMessageText", {"chat_id": cid, "message_id": mid, "text": f"✅ +{order['phone']}\nID: {order['id']}", "reply_markup": kb})
+                        else:
+                            tg("editMessageText", {"chat_id": cid, "message_id": mid, "text": f"❌ {order}"})
+                    elif data.startswith("code_"):
+                        oid = data.replace("code_", "")
+                        chk = requests.get(f"{BASE}/user/check/{oid}", headers=H, timeout=10).json()
+                        if chk.get("sms"):
+                            tg("editMessageText", {"chat_id": cid, "message_id": mid, "text": f"✅ CODE: {chk['sms'][0]['code']}"})
+                        else:
+                            tg("editMessageText", {"chat_id": cid, "message_id": mid, "text": f"⏳ Waiting... {chk.get('status')}"})
+                    elif data.startswith("cancel_"):
+                        oid = data.replace("cancel_", "")
+                        requests.get(f"{BASE}/user/cancel/{oid}", headers=H)
+                        tg("editMessageText", {"chat_id": cid, "message_id": mid, "text": "✅ Refunded"})
+                    elif data == "balance":
+                        p = requests.get(f"{BASE}/user/profile", headers=H).json()
+                        tg("editMessageText", {"chat_id": cid, "message_id": mid, "text": f"💰 Balance: {p.get('balance')}"})
         except Exception as e:
-            await q.edit_message_text(f"❌ Error: {e}")
-    elif data.startswith("code_"):
-        oid = data.replace("code_", "")
-        try:
-            r = requests.get(f"{BASE}/user/check/{oid}", headers=HEADERS, timeout=10).json()
-            if r.get("sms"):
-                await q.edit_message_text(f"✅ CODE: {r['sms'][0]['code']}")
-            else:
-                await q.edit_message_text(f"⏳ Waiting... Status: {r.get('status')}")
-        except Exception as e:
-            await q.edit_message_text(f"Error {e}")
-    elif data.startswith("cancel_"):
-        oid = data.replace("cancel_", "")
-        requests.get(f"{BASE}/user/cancel/{oid}", headers=HEADERS)
-        await q.edit_message_text("✅ Cancelled & Refunded")
-    elif data == "balance":
-        try:
-            r = requests.get(f"{BASE}/user/profile", headers=HEADERS).json()
-            await q.edit_message_text(f"💰 Balance: {r.get('balance')} RUB")
-        except:
-            await q.edit_message_text("Error balance")
-
-def run_bot():
-    application = Application.builder().token(TOKEN).build()
-    application.add_handler(CommandHandler("start", start_cmd))
-    application.add_handler(CallbackQueryHandler(btn_handler))
-    application.run_polling()
+            print(f"loop error {e}")
+            time.sleep(3)
 
 if __name__ == "__main__":
-    Thread(target=lambda: app.run(host='0.0.0.0', port=int(os.environ.get("PORT", 10000)))).start()
-    time.sleep(2)
-    run_bot()
+    threading.Thread(target=bot_loop, daemon=True).start()
+    app.run(host='0.0.0.0', port=int(os.environ.get("PORT", 10000)))
