@@ -6,7 +6,7 @@ from flask import Flask
 import threading
 
 BOT_TOKEN = "YOUR_BOT_TOKEN_HERE"
-API_5SIM = "YOUR_5SIM_API_KEY"
+API_SIM5 = "YOUR_SIM5_API_KEY"
 ADMIN_ID = 123456789
 
 EUROPE_COUNTRIES = ["portugal", "romania", "estonia", "poland", "bulgaria", "netherlands"]
